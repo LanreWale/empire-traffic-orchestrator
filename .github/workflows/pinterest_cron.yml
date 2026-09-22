@@ -1,0 +1,31 @@
+name: Pinterest Auto-Poster
+
+on:
+  schedule:
+    # Runs 3x/day at varied times (UTC). Pinterest's algorithm
+    # rewards consistency more than volume.
+    - cron: '17 9 * * *'    # 09:17 UTC
+    - cron: '43 14 * * *'   # 14:43 UTC
+    - cron: '11 20 * * *'   # 20:11 UTC
+  workflow_dispatch:         # allow manual trigger
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Post pins
+        env:
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          PINS_PER_RUN: '3'
+        run: python pinterest_bot.py

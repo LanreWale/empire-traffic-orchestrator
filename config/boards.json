@@ -1,0 +1,8 @@
+{
+  "budgeting-finance":   { "name": "Budgeting & Finance",   "board_id": "REPLACE_ME_1" },
+  "career-side-hustles": { "name": "Career & Side Hustles", "board_id": "REPLACE_ME_2" },
+  "fitness-health":      { "name": "Fitness & Health",      "board_id": "REPLACE_ME_3" },
+  "study-education":     { "name": "Study & Education",     "board_id": "REPLACE_ME_4" },
+  "travel-lifestyle":    { "name": "Travel & Lifestyle",    "board_id": "REPLACE_ME_5" },
+  "free-resources":      { "name": "Free Resources",        "board_id": "REPLACE_ME_6" }
+}
