@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_BASE = "https://api.pinterest.com/v5"
+API_BASE = "https://api-sandbox.pinterest.com/v5"
 
 
 def _headers() -> dict:
