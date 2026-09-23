@@ -1,0 +1,37 @@
+{
+  "pins": [
+    {
+      "id": "01_meal_prep",
+      "board_id": "664984769919720032",
+      "board_name": "Budgeting & Finance",
+      "title": "Spend $147 on Food for a Month — 30-Day Meal Prep Guide",
+      "description": "A complete 30-day meal prep guide with every meal planned under $5. Weekly shopping lists, batch cooking schedules, and 30 step-by-step recipes. Free download. #mealprep #budgetfood #mealplanning #frugalliving #budgetmeals",
+      "image_url": "https://raw.githubusercontent.com/LanreWale/empire-traffic-orchestrator/main/pins/images/01_meal_prep.png",
+      "link": "https://empireaffiliatemarketinghub.com/offers/budget-meal-prep-guide.html?utm_source=pinterest&utm_medium=pin&utm_campaign=empire_traffic",
+      "alt_text": "Meal prep containers filled with chicken, broccoli, and rice with headline 'Spend $147 on Food for a Month'",
+      "status": "ready"
+    },
+    {
+      "id": "02_groceries",
+      "board_id": "664984769919720032",
+      "board_name": "Budgeting & Finance",
+      "title": "Save $250/Month on Groceries — Free Budget Spreadsheet",
+      "description": "The grocery budget system that saved me $250 every month. Plan meals, track spending, cut food waste, and keep more money in your pocket. Free spreadsheet download. #grocerybudget #budgeting #moneysaving #frugalliving #personalfinance",
+      "image_url": "https://raw.githubusercontent.com/LanreWale/empire-traffic-orchestrator/main/pins/images/02_groceries.png",
+      "link": "https://empireaffiliatemarketinghub.com/offers/save-money-on-groceries.html?utm_source=pinterest&utm_medium=pin&utm_campaign=empire_traffic",
+      "alt_text": "Shopping cart full of groceries with text 'Save $250/Month on Groceries' and 'Free Budget Spreadsheet'",
+      "status": "ready"
+    },
+    {
+      "id": "03_budget",
+      "board_id": "664984769919720032",
+      "board_name": "Budgeting & Finance",
+      "title": "Track Every Dollar — Free Personal Budget Spreadsheet",
+      "description": "The budget spreadsheet that finally made me save money. Track income, monitor expenses, build savings, and reach your goals — all in one free download. Works in Google Sheets and Excel. #budgeting #personalfinance #moneytips #savingsgoals #budgetplanner",
+      "image_url": "https://raw.githubusercontent.com/LanreWale/empire-traffic-orchestrator/main/pins/images/03_budget.png",
+      "link": "https://empireaffiliatemarketinghub.com/offers/personal-budget-spreadsheet.html?utm_source=pinterest&utm_medium=pin&utm_campaign=empire_traffic",
+      "alt_text": "Budget plan notebook, calculator, and savings jar with text 'Track Every Dollar' and 'Free Personal Budget Spreadsheet'",
+      "status": "ready"
+    }
+  ]
+}
