@@ -1,65 +1,56 @@
 """
 Shared Supabase client for all channel posters.
 
-Reads SUPABASE_SERVICE_ROLE_KEY from environment — required because posters
-need write access to distribution_content (RLS blocks anon writes).
+Reads and writes the distribution_content table — the queue that the
+Empire admin dashboard displays. Use this to fetch what's ready to post
+and to report back what happened.
 
-Usage (from any poster script):
-    import sys, os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from shared.supabase_client import (
-        fetch_ready, mark_queued, mark_posted, mark_failed, mark_manual,
-    )
-
-Environment variables required:
-    SUPABASE_SERVICE_ROLE_KEY   — service role key (write access)
-    SUPABASE_URL                — optional, defaults to the Empire project URL
+Also re-exports the existing src.supabase_client helpers so callers can
+log to posts_tracking (the audit table) alongside the queue.
 """
 
 import os
 import sys
 from supabase import create_client, Client
+from dotenv import load_dotenv
 
-# ==========================================
-# CONFIG
-# ==========================================
-SUPABASE_URL = os.environ.get(
-    "SUPABASE_URL",
-    "https://qujlyrmatuvlpoeheqgf.supabase.co"
-)
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+load_dotenv()
 
-if not SUPABASE_KEY:
-    print("ERROR: SUPABASE_SERVICE_ROLE_KEY environment variable not set.", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("Get it from: Supabase Dashboard → Project Settings → API → service_role key", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("PowerShell (current session):", file=sys.stderr)
-    print("  $env:SUPABASE_SERVICE_ROLE_KEY = 'eyJ...'", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("PowerShell (persistent):", file=sys.stderr)
-    print("  [Environment]::SetEnvironmentVariable('SUPABASE_SERVICE_ROLE_KEY', 'eyJ...', 'User')", file=sys.stderr)
-    sys.exit(1)
+_client: Client | None = None
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def get_supabase() -> Client:
+    """Lazy singleton — same pattern as src/supabase_client.py."""
+    global _client
+    if _client is None:
+        url = os.environ["SUPABASE_URL"]
+        # Prefer service role key for write access; fall back to anon for read-only.
+        key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY")
+        )
+        if not key:
+            print(
+                "ERROR: Neither SUPABASE_SERVICE_ROLE_KEY nor SUPABASE_KEY is set.",
+                file=sys.stderr,
+            )
+            print(
+                "       Get the service_role key from Supabase → Project Settings → API.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        _client = create_client(url, key)
+    return _client
 
 
 # ==========================================
 # READ
 # ==========================================
 def fetch_ready(channel: str) -> list:
-    """
-    Return all rows with status='ready' for a given channel, oldest first.
-
-    Args:
-        channel: 'pinterest' | 'telegram' | 'quora' | 'reddit' | 'youtube'
-                 | 'twitter' | 'instagram' | 'tiktok' | 'linkedin'
-
-    Returns:
-        List of row dicts from distribution_content.
-    """
+    """All rows with status='ready' for a channel, oldest first."""
     res = (
-        supabase.table("distribution_content")
+        get_supabase()
+        .table("distribution_content")
         .select("*")
         .eq("channel", channel)
         .eq("status", "ready")
@@ -70,9 +61,10 @@ def fetch_ready(channel: str) -> list:
 
 
 def fetch_by_status(channel: str, status: str) -> list:
-    """Return rows for a channel filtered by arbitrary status."""
+    """Rows for a channel filtered by status."""
     res = (
-        supabase.table("distribution_content")
+        get_supabase()
+        .table("distribution_content")
         .select("*")
         .eq("channel", channel)
         .eq("status", status)
@@ -82,101 +74,54 @@ def fetch_by_status(channel: str, status: str) -> list:
     return res.data or []
 
 
-def fetch_one(row_id: str) -> dict | None:
-    """Fetch a single row by id. Returns None if not found."""
-    res = (
-        supabase.table("distribution_content")
-        .select("*")
-        .eq("id", row_id)
-        .limit(1)
-        .execute()
-    )
-    return (res.data or [None])[0]
-
-
 # ==========================================
 # WRITE — STATE TRANSITIONS
 # ==========================================
 def mark_queued(row_id: str) -> None:
-    """Set status='queued' — poster has picked it up and is about to publish."""
-    supabase.table("distribution_content").update({
+    get_supabase().table("distribution_content").update({
         "status": "queued",
         "error_message": None,
     }).eq("id", row_id).execute()
 
 
 def mark_posted(row_id: str, external_id: str) -> None:
-    """
-    Set status='posted' with the platform's returned ID.
-
-    Args:
-        row_id:      distribution_content.id
-        external_id: Pinterest pin id / Telegram message id / Reddit post id / etc.
-    """
-    supabase.table("distribution_content").update({
+    from datetime import datetime, timezone
+    get_supabase().table("distribution_content").update({
         "status": "posted",
         "external_id": str(external_id),
-        "posted_at": "now()",
+        "posted_at": datetime.now(timezone.utc).isoformat(),
         "error_message": None,
     }).eq("id", row_id).execute()
 
 
 def mark_failed(row_id: str, error: str) -> None:
-    """Set status='failed' with a truncated error message (max 500 chars)."""
-    supabase.table("distribution_content").update({
+    get_supabase().table("distribution_content").update({
         "status": "failed",
         "error_message": (error or "Unknown error")[:500],
     }).eq("id", row_id).execute()
 
 
-def mark_manual(row_id: str, note: str = "") -> None:
-    """
-    Set status='manual_required' — for channels without an API (e.g. Quora),
-    or when a human needs to intervene.
-    """
-    supabase.table("distribution_content").update({
-        "status": "manual_required",
-        "error_message": (note or None),
-    }).eq("id", row_id).execute()
-
-
 def reset_to_ready(row_id: str) -> None:
-    """Reset a failed row back to ready — for retries after fixing the cause."""
-    supabase.table("distribution_content").update({
+    get_supabase().table("distribution_content").update({
         "status": "ready",
         "error_message": None,
     }).eq("id", row_id).execute()
 
 
-def reset_channel_to_ready(channel: str) -> int:
-    """
-    Bulk reset: all failed rows for a channel back to ready.
-    Returns the number of rows affected.
-
-    Useful when Trial access blocks posting and you want to retry later:
-
-        from shared.supabase_client import reset_channel_to_ready
-        count = reset_channel_to_ready("pinterest")
-        print(f"Reset {count} pins")
-    """
-    before = fetch_by_status(channel, "failed")
-    for row in before:
+def reset_channel_failed_to_ready(channel: str) -> int:
+    """Bulk reset: all failed rows for a channel back to ready."""
+    rows = fetch_by_status(channel, "failed")
+    for row in rows:
         reset_to_ready(row["id"])
-    return len(before)
+    return len(rows)
 
 
 # ==========================================
 # DIAGNOSTICS
 # ==========================================
 def stats(channel: str) -> dict:
-    """
-    Return counts per status for a channel.
-    Handy for poster scripts that want a quick summary line.
-    """
+    """Counts per status for a channel."""
     statuses = ["draft", "ready", "queued", "posted", "failed", "manual_required"]
-    out = {s: 0 for s in statuses}
-    for s in statuses:
-        rows = fetch_by_status(channel, s)
-        out[s] = len(rows)
-    out["total"] = sum(out[s] for s in statuses)
+    out = {s: len(fetch_by_status(channel, s)) for s in statuses}
+    out["total"] = sum(out.values())
     return out
