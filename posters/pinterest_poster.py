@@ -1,110 +1,109 @@
 """
-Pinterest pin poster — reads ready pins from Supabase, posts via Pinterest v5 API,
-writes results back to distribution_content.
+Pinterest poster — reads ready pins from Supabase, posts via Pinterest v5 API,
+writes results back to distribution_content AND logs to posts_tracking.
 
 Usage:
     python posters/pinterest_poster.py
 
 Environment variables required:
-    PINTEREST_ACCESS_TOKEN   — Pinterest API v5 access token
-    SUPABASE_SERVICE_ROLE_KEY — Supabase service role key
+    PINTEREST_ACCESS_TOKEN     — Pinterest v5 token
+    PINTEREST_API_MODE         — 'sandbox' (default) or 'production'
+    SUPABASE_URL               — Supabase project URL
+    SUPABASE_SERVICE_ROLE_KEY  — service role key (write access)
 
 Exit codes:
     0 — success (all pins posted, or nothing to do)
-    1 — configuration error
-    2 — Pinterest auth/access error (likely Trial access — no pins posted)
-    3 — partial failure (some pins failed)
+    2 — Pinterest 403 (Trial access blocks production pins)
+    3 — partial failure (some pins failed for other reasons)
 """
 
 import os
 import sys
 import time
+from pathlib import Path
+
+# Ensure repo root on path so 'shared' and 'src' both import cleanly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import requests
 
-# Add parent to path so we can import shared
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.supabase_client import (
-    fetch_ready, mark_queued, mark_posted, mark_failed, mark_manual,
+    fetch_ready, mark_queued, mark_posted, mark_failed,
+    get_supabase,
 )
+from src.pinterest_client import create_pin, API_BASE
+
 
 # ==========================================
-# CONFIG
+# AUDIT LOG (posts_tracking)
 # ==========================================
-PINTEREST_API = "https://api.pinterest.com/v5"
-PINTEREST_TOKEN = os.environ.get("PINTEREST_ACCESS_TOKEN")
-
-if not PINTEREST_TOKEN:
-    print("ERROR: PINTEREST_ACCESS_TOKEN not set.", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("Generate one at: https://developers.pinterest.com/apps/1614635", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("  $env:PINTEREST_ACCESS_TOKEN = 'pina_...'", file=sys.stderr)
-    sys.exit(1)
-
-HEADERS = {
-    "Authorization": f"Bearer {PINTEREST_TOKEN}",
-    "Content-Type": "application/json",
-}
-
-# ==========================================
-# PINTEREST API CALL
-# ==========================================
-def create_pin(row: dict) -> dict:
+def log_to_audit(row: dict, external_id: str) -> None:
     """
-    POST /v5/pins — create a pin.
-    Returns { 'ok': True, 'pin_id': '...' } on success.
-    Returns { 'ok': False, 'status': int, 'error': '...' } on failure.
+    Also record the successful post in posts_tracking (the audit table
+    the existing supabase_client.py writes to). Best-effort — failures
+    here do not roll back the pin.
+    """
+    try:
+        table = os.environ.get("POSTS_TRACKING_TABLE", "posts_tracking")
+        get_supabase().table(table).insert({
+            "platform": "pinterest",
+            "offer_id": row.get("offer_id") or "",
+            "external_id": external_id,
+            "url": row["destination_url"],
+            "title": row.get("title") or "",
+            "status": "posted",
+            "metadata": {
+                "board_id": row.get("metadata", {}).get("board_id"),
+                "board_or_target": row.get("board_or_target"),
+                "dist_id": row["id"],
+            },
+        }).execute()
+    except Exception as e:
+        print(f"    ⚠ audit log write failed (non-fatal): {e}")
+
+
+# ==========================================
+# SINGLE PIN
+# ==========================================
+def post_one(row: dict) -> tuple[bool, str | None]:
+    """
+    Post a single row. Returns (ok, external_id_or_error).
+    Handles the 403 case specially so the caller can stop early.
     """
     board_id = row.get("metadata", {}).get("board_id")
     if not board_id:
-        return {"ok": False, "status": 0, "error": "Missing board_id in metadata"}
+        return False, "Missing board_id in metadata"
 
-    # Pinterest hard limits — truncate defensively
-    title = (row.get("title") or "")[:100]
-    description = (row.get("description") or "")[:500]
-    alt_text = (row.get("metadata", {}).get("alt_text") or "")[:500]
     image_url = row.get("media_url")
-
     if not image_url:
-        return {"ok": False, "status": 0, "error": "Missing media_url"}
-
-    body = {
-        "board_id": board_id,
-        "title": title,
-        "description": description,
-        "alt_text": alt_text,
-        "link": row["destination_url"],
-        "media_source": {
-            "source_type": "image_url",
-            "url": image_url,
-        },
-    }
+        return False, "Missing media_url"
 
     try:
-        r = requests.post(
-            f"{PINTEREST_API}/pins",
-            headers=HEADERS,
-            json=body,
-            timeout=30,
+        result = create_pin(
+            board_id=board_id,
+            title=row.get("title") or "",
+            description=row.get("description") or "",
+            link=row["destination_url"],
+            image_url=image_url,
+            alt_text=row.get("metadata", {}).get("alt_text", ""),
         )
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 0
+        detail = ""
+        if e.response is not None:
+            detail = e.response.text[:300]
+        if status == 403:
+            return False, f"403 Forbidden — Trial access blocks production pins. {detail}"
+        if status == 401:
+            return False, f"401 Unauthorized — check PINTEREST_ACCESS_TOKEN. {detail}"
+        if status == 429:
+            return False, f"429 Rate limited — slow down and retry. {detail}"
+        return False, f"{status} {detail}"
     except requests.RequestException as e:
-        return {"ok": False, "status": 0, "error": f"Network error: {e}"}
+        return False, f"Network error: {e}"
 
-    # Success
-    if r.status_code in (200, 201):
-        pin_id = r.json().get("id", "")
-        return {"ok": True, "pin_id": pin_id}
-
-    # Known failure modes
-    if r.status_code == 401:
-        return {"ok": False, "status": 401, "error": "Unauthorized — access token invalid or expired"}
-    if r.status_code == 403:
-        return {"ok": False, "status": 403, "error": "Forbidden — Trial access cannot create production pins. Standard access required."}
-    if r.status_code == 429:
-        return {"ok": False, "status": 429, "error": "Rate limited — try again in a few minutes"}
-
-    # Generic
-    return {"ok": False, "status": r.status_code, "error": r.text[:300]}
+    pin_id = result.get("id", "")
+    return True, pin_id
 
 
 # ==========================================
@@ -113,6 +112,7 @@ def create_pin(row: dict) -> dict:
 def main() -> int:
     print("=" * 60)
     print("  Pinterest Poster — Empire Traffic Orchestrator")
+    print(f"  API mode: {API_BASE}")
     print("=" * 60)
     print()
 
@@ -121,10 +121,9 @@ def main() -> int:
 
     if total == 0:
         print("No ready pins in distribution_content. Nothing to do.")
-        print()
         return 0
 
-    print(f"Found {total} ready pin(s) to post.")
+    print(f"Found {total} ready pin(s).")
     print()
 
     success = 0
@@ -138,55 +137,45 @@ def main() -> int:
 
         mark_queued(row["id"])
 
-        result = create_pin(row)
+        ok, result = post_one(row)
 
-        if result["ok"]:
-            pin_id = result["pin_id"]
-            mark_posted(row["id"], pin_id)
-            print(f"    ✓ Posted. Pinterest pin id: {pin_id}")
+        if ok:
+            mark_posted(row["id"], result)
+            log_to_audit(row, result)
+            print(f"    ✓ Posted. Pinterest pin id: {result}")
             success += 1
         else:
-            error = result.get("error", "Unknown error")
-            mark_failed(row["id"], error)
-
-            if result.get("status") == 403:
-                print(f"    ✗ 403 Forbidden — Trial access blocks pin creation.")
-                print(f"      This is expected until Pinterest approves Standard access.")
+            mark_failed(row["id"], result)
+            print(f"    ✗ {result}")
+            if "403" in (result or ""):
                 trial_blocked = True
-                # No point continuing — every pin will fail the same way
+                print("      (Trial access blocks pin creation — expected until Standard is approved.)")
                 break
-            else:
-                print(f"    ✗ {error}")
-                failed += 1
+            failed += 1
 
-        # Rate limiting courtesy
-        time.sleep(1.2)
+        time.sleep(1.2)  # rate-limit courtesy
 
-    # ==========================================
-    # SUMMARY
-    # ==========================================
+    # -------- SUMMARY --------
     print()
     print("=" * 60)
     print(f"  Posted:  {success}")
     print(f"  Failed:  {failed}")
+
     if trial_blocked:
         print()
-        print("  ⚠ Trial access is blocking pin creation.")
-        print("    All unposted pins have been marked as 'failed' with the 403 message.")
+        print("  ⚠ Trial access is blocking posting.")
         print("    Once Standard access is approved:")
-        print("      1. Regenerate your Pinterest access token")
-        print("      2. Reset failed pins back to 'ready' (SQL below)")
-        print("      3. Re-run this script")
-        print()
-        print("    Reset SQL:")
-        print("      UPDATE distribution_content")
-        print("      SET status='ready', error_message=NULL")
-        print("      WHERE channel='pinterest' AND status='failed';")
+        print("      1. Set PINTEREST_API_MODE=production in .env")
+        print("      2. Regenerate PINTEREST_ACCESS_TOKEN")
+        print("      3. Reset failed pins:")
+        print("         UPDATE distribution_content")
+        print("         SET status='ready', error_message=NULL")
+        print("         WHERE channel='pinterest' AND status='failed';")
+        print("      4. Re-run this script.")
         print("=" * 60)
         return 2
 
     print("=" * 60)
-
     return 0 if failed == 0 else 3
 
 
