@@ -25,6 +25,7 @@ jobs:
       - name: Post pins
         env:
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_API_MODE: ${{ secrets.PINTEREST_API_MODE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           PINS_PER_RUN: '3'
